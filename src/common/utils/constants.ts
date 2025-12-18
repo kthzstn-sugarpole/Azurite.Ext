@@ -36,6 +36,148 @@ export const DEFAULT_SQL_OPTIONS = {
   }
 };
 
+// SQLite specific options
+export const DEFAULT_SQLITE_OPTIONS = {
+  dialect: "sqlite" as const,
+  logging: false,
+  pool: {
+    max: 5,
+    min: 0,
+    acquire: 30000,
+    idle: 10000
+  }
+};
+
+// Environment variable for database connection
+export const AZURITE_DB_ENV = "AZURITE_DB";
+
+// Check if connection string is SQLite
+export function isSqliteConnectionString(connectionUri: string): boolean {
+  return connectionUri.startsWith("sqlite:");
+}
+
+// Parse SQLite connection string to get file path
+export function parseSqliteConnectionString(connectionUri: string): string {
+  // Format: sqlite:./path/to/db.sqlite or sqlite:///absolute/path/db.sqlite
+  return connectionUri.replace(/^sqlite:\/?/, "");
+}
+
+/**
+ * Sanitize connection URI by removing JDBC-style query parameters
+ * that are not supported by mysql2/tedious drivers.
+ * 
+ * Example input:  mysql://user:pass@host:3306/db?useSSL=false&allowPublicKeyRetrieval=true
+ * Example output: mysql://user:pass@host:3306/db
+ */
+export function sanitizeConnectionUri(connectionUri: string): string {
+  // Skip for SQLite
+  if (isSqliteConnectionString(connectionUri)) {
+    return connectionUri;
+  }
+
+  // Remove query parameters (everything after ?)
+  const queryIndex = connectionUri.indexOf("?");
+  if (queryIndex !== -1) {
+    const sanitized = connectionUri.substring(0, queryIndex);
+    console.log(`Sanitized connection URI: removed query parameters`);
+    return sanitized;
+  }
+
+  return connectionUri;
+}
+
+/**
+ * Parse database connection URI and extract components
+ * Supports: mysql://user:pass@host:port/database, mssql://user:pass@host:port/database
+ */
+export function parseConnectionUri(connectionUri: string): {
+  dialect: string;
+  username: string;
+  password: string;
+  host: string;
+  port: number;
+  database: string;
+} | null {
+  try {
+    // Replace mysql:// or mssql:// with http:// for URL parsing
+    const dialect = connectionUri.split("://")[0];
+    const urlString = connectionUri.replace(/^(\w+):\/\//, "http://");
+    const url = new URL(urlString);
+
+    const database = url.pathname.replace(/^\//, "");
+    if (!database) return null;
+
+    return {
+      dialect,
+      username: decodeURIComponent(url.username),
+      password: decodeURIComponent(url.password),
+      host: url.hostname,
+      port: parseInt(url.port, 10) || (dialect === "mysql" ? 3306 : 1433),
+      database
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ensure database exists (MySQL/SQL Server only)
+ */
+export async function ensureDatabaseExists(connectionUri: string): Promise<void> {
+  if (isSqliteConnectionString(connectionUri)) return;
+
+  const parsed = parseConnectionUri(connectionUri);
+  if (!parsed) {
+    console.log(`Note: Could not parse connection URI for auto-create database`);
+    return;
+  }
+
+  const { dialect, username, password, host, port, database } = parsed;
+  console.log(`Checking database '${database}' exists on ${dialect}://${host}:${port}...`);
+
+  if (dialect === "mysql") {
+    try {
+      const mysql = require("mysql2/promise");
+      const conn = await mysql.createConnection({
+        host,
+        port,
+        user: username,
+        password,
+        connectTimeout: 10000
+      });
+      await conn.execute(`CREATE DATABASE IF NOT EXISTS \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin`);
+      console.log(`Database '${database}' created or already exists (MySQL)`);
+      await conn.end();
+    } catch (e: any) {
+      console.error(`Failed to auto-create database '${database}': ${e.message}`);
+      // Don't throw - let the main connection attempt handle the error
+    }
+  } else if (dialect === "mssql") {
+    try {
+      const tedious = require("tedious");
+      await new Promise<void>((resolve, reject) => {
+        const c = new tedious.Connection({
+          server: host,
+          authentication: { type: "default", options: { userName: username, password } },
+          options: { port, database: "master", encrypt: true, trustServerCertificate: true, connectTimeout: 10000 }
+        });
+        c.on("connect", (err: Error) => {
+          if (err) { reject(err); return; }
+          const r = new tedious.Request(
+            `IF NOT EXISTS (SELECT name FROM sys.databases WHERE name='${database}') CREATE DATABASE [${database}]`,
+            (error: Error) => { c.close(); error ? reject(error) : resolve(); }
+          );
+          c.execSql(r);
+        });
+        c.connect();
+      });
+      console.log(`Database '${database}' created or already exists (SQL Server)`);
+    } catch (e: any) {
+      console.error(`Failed to auto-create database '${database}': ${e.message}`);
+    }
+  }
+}
+
 export const BEARER_TOKEN_PREFIX = "Bearer";
 export const HTTPS = "https";
 

@@ -6,11 +6,18 @@ import {
   Sequelize
 } from "sequelize";
 
+import {
+  DEFAULT_SQLITE_OPTIONS,
+  ensureDatabaseExists,
+  isSqliteConnectionString,
+  parseSqliteConnectionString,
+  sanitizeConnectionUri
+} from "../utils/constants";
 import AllExtentsAsyncIterator from "./AllExtentsAsyncIterator";
 import IExtentMetadataStore, { IExtentModel } from "./IExtentMetadataStore";
 
 // tslint:disable: max-classes-per-file
-class ExtentsModel extends Model {}
+class ExtentsModel extends Model { }
 
 /**
  * A SQL based extent metadata storage implementation based on Sequelize.
@@ -23,6 +30,7 @@ class ExtentsModel extends Model {}
 export default class SqlExtentMetadataStore implements IExtentMetadataStore {
   private initialized: boolean = false;
   private closed: boolean = false;
+  private readonly connectionURI: string;
   private readonly sequelize: Sequelize;
 
   /**
@@ -36,17 +44,31 @@ export default class SqlExtentMetadataStore implements IExtentMetadataStore {
     connectionURI: string,
     sequelizeOptions?: SequelizeOptions
   ) {
+    const sanitizedURI = sanitizeConnectionUri(connectionURI);
+    this.connectionURI = sanitizedURI;
+    // Handle SQLite connection string
+    if (isSqliteConnectionString(sanitizedURI)) {
+      const dbPath = parseSqliteConnectionString(sanitizedURI);
+      this.sequelize = new Sequelize({
+        ...DEFAULT_SQLITE_OPTIONS,
+        ...sequelizeOptions,
+        storage: dbPath
+      });
+    }
     // Enable encrypt connection for SQL Server
-    if (connectionURI.startsWith("mssql") && sequelizeOptions) {
+    else if (sanitizedURI.startsWith("mssql") && sequelizeOptions) {
       sequelizeOptions.dialectOptions = sequelizeOptions.dialectOptions || {};
       (sequelizeOptions.dialectOptions as any).options =
         (sequelizeOptions.dialectOptions as any).options || {};
       (sequelizeOptions.dialectOptions as any).options.encrypt = true;
+      this.sequelize = new Sequelize(sanitizedURI, sequelizeOptions);
+    } else {
+      this.sequelize = new Sequelize(sanitizedURI, sequelizeOptions);
     }
-    this.sequelize = new Sequelize(connectionURI, sequelizeOptions);
   }
 
   public async init(): Promise<void> {
+    await ensureDatabaseExists(this.connectionURI);
     await this.sequelize.authenticate();
 
     ExtentsModel.init(
@@ -74,8 +96,9 @@ export default class SqlExtentMetadataStore implements IExtentMetadataStore {
       { sequelize: this.sequelize, modelName: "Extents", timestamps: false }
     );
 
-    // TODO: Remove this part which only for test.
-    await this.sequelize.sync();
+    // Sync without altering existing tables to preserve data
+    // alter: false ensures existing data is not deleted
+    await this.sequelize.sync({ alter: false });
 
     this.initialized = true;
   }

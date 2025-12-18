@@ -12,47 +12,42 @@ import IExtentMetadataStore from "../common/persistence/IExtentMetadataStore";
 import IExtentStore from "../common/persistence/IExtentStore";
 import SqlExtentMetadataStore from "../common/persistence/SqlExtentMetadataStore";
 import ServerBase, { ServerStatus } from "../common/ServerBase";
-import BlobRequestListenerFactory from "./BlobRequestListenerFactory";
-import BlobGCManager from "./gc/BlobGCManager";
-import IBlobMetadataStore from "./persistence/IBlobMetadataStore";
-import SqlBlobMetadataStore from "./persistence/SqlBlobMetadataStore";
-import SqlBlobConfiguration from "./SqlBlobConfiguration";
+import QueueGCManager from "./gc/QueueGCManager";
+import IQueueMetadataStore from "./persistence/IQueueMetadataStore";
+import SqlQueueMetadataStore from "./persistence/SqlQueueMetadataStore";
+import SqlQueueConfiguration from "./SqlQueueConfiguration";
+import QueueRequestListenerFactory from "./QueueRequestListenerFactory";
 
-const BEFORE_CLOSE_MESSAGE = `Azurite Blob service is closing...`;
-const BEFORE_CLOSE_MESSAGE_GC_ERROR = `Azurite Blob service is closing... Critical error happens during GC.`;
-const AFTER_CLOSE_MESSAGE = `Azurite Blob service successfully closed`;
+const BEFORE_CLOSE_MESSAGE = `Azurite Queue service is closing...`;
+const BEFORE_CLOSE_MESSAGE_GC_ERROR = `Azurite Queue service is closing... Critical error happens during GC.`;
+const AFTER_CLOSE_MESSAGE = `Azurite Queue service successfully closed`;
 
 /**
- * Default implementation of Azurite Blob HTTP server.
- * This implementation provides a HTTP service based on express framework and LokiJS in memory database.
- *
- * We can create other blob servers by extending abstract Server class and initialize different httpServer,
- * dataStore or requestListenerFactory fields.
- *
- * For example, creating a HTTPS server to accept HTTPS requests, or using other
- * Node.js HTTP frameworks like Koa, or just using another SQL database.
+ * SQL-based implementation of Azurite Queue HTTP server.
+ * This implementation provides a HTTP service based on express framework and SQL database.
+ * Supports MySQL, SQL Server, PostgreSQL, and SQLite.
  *
  * @export
- * @class Server
+ * @class SqlQueueServer
  */
-export default class SqlBlobServer extends ServerBase {
-  private readonly metadataStore: IBlobMetadataStore;
+export default class SqlQueueServer extends ServerBase {
+  private readonly metadataStore: IQueueMetadataStore;
   private readonly extentMetadataStore: IExtentMetadataStore;
   private readonly extentStore: IExtentStore;
   private readonly accountDataStore: IAccountDataStore;
   private readonly gcManager: IGCManager;
 
   /**
-   * Creates an instance of Server.
+   * Creates an instance of SqlQueueServer.
    *
-   * @param {BlobConfiguration} configuration
-   * @memberof Server
+   * @param {SqlQueueConfiguration} configuration
+   * @memberof SqlQueueServer
    */
-  constructor(configuration: SqlBlobConfiguration) {
+  constructor(configuration: SqlQueueConfiguration) {
     const host = configuration.host;
     const port = configuration.port;
 
-    // We can crate a HTTP server or a HTTPS server here
+    // Create HTTP or HTTPS server
     let httpServer;
     const certOption = configuration.hasCert();
     switch (certOption) {
@@ -64,14 +59,17 @@ export default class SqlBlobServer extends ServerBase {
         httpServer = http.createServer();
     }
 
-    const metadataStore: IBlobMetadataStore = new SqlBlobMetadataStore(
+    if (configuration.keepAliveTimeout > 0) {
+      httpServer.keepAliveTimeout = configuration.keepAliveTimeout * 1000;
+    }
+
+    // Create SQL-based metadata stores
+    const metadataStore: IQueueMetadataStore = new SqlQueueMetadataStore(
       configuration.sqlURL,
       configuration.sequelizeOptions
     );
 
-    const extentMetadataStore: IExtentMetadataStore = new SqlExtentMetadataStore(
-      // Currently, extent metadata and blob metadata share same database
-      // But they can use separate databases per future requirements
+    const extentMetadataStore = new SqlExtentMetadataStore(
       configuration.sqlURL,
       configuration.sequelizeOptions
     );
@@ -84,16 +82,13 @@ export default class SqlBlobServer extends ServerBase {
 
     const accountDataStore: IAccountDataStore = new AccountDataStore(logger);
 
-    // We can also change the HTTP framework here by
-    // creating a new XXXListenerFactory implementing IRequestListenerFactory interface
-    // and replace the default Express based request listener
-    const requestListenerFactory: IRequestListenerFactory = new BlobRequestListenerFactory(
+    // Create request listener factory
+    const requestListenerFactory: IRequestListenerFactory = new QueueRequestListenerFactory(
       metadataStore,
       extentStore,
       accountDataStore,
-      configuration.enableAccessLog, // Access log includes every handled HTTP request
+      configuration.enableAccessLog,
       configuration.accessLogWriteStream,
-      configuration.loose,
       configuration.skipApiVersionCheck,
       configuration.getOAuthLevel(),
       configuration.disableProductStyleUrl
@@ -101,28 +96,21 @@ export default class SqlBlobServer extends ServerBase {
 
     super(host, port, httpServer, requestListenerFactory, configuration);
 
-    // Default Blob GC Manager
-    // Will close service when any critical GC error happens
-    // GC interval set to 24 hours (86400000ms) to effectively disable automatic GC
-    // This prevents GC from deleting extents before they are properly referenced
-    const gcManager = new BlobGCManager(
+    const gcManager = new QueueGCManager(
       metadataStore,
       extentMetadataStore,
       extentStore,
-      error => {
+      () => {
         // tslint:disable-next-line:no-console
-        console.log(BEFORE_CLOSE_MESSAGE_GC_ERROR, error);
-        logger.info(BEFORE_CLOSE_MESSAGE_GC_ERROR + JSON.stringify(error));
-
-        // TODO: Bring this back when GC based on SQL implemented
+        console.log(BEFORE_CLOSE_MESSAGE_GC_ERROR);
+        logger.info(BEFORE_CLOSE_MESSAGE_GC_ERROR);
         this.close().then(() => {
           // tslint:disable-next-line:no-console
           console.log(AFTER_CLOSE_MESSAGE);
           logger.info(AFTER_CLOSE_MESSAGE);
         });
       },
-      logger,
-      86400000 // 24 hours - effectively disable GC
+      logger
     );
 
     this.metadataStore = metadataStore;
@@ -133,10 +121,10 @@ export default class SqlBlobServer extends ServerBase {
   }
 
   /**
-   * Clean up server persisted extent data.
+   * Clean up server persisted data.
    *
    * @returns {Promise<void>}
-   * @memberof BlobServer
+   * @memberof SqlQueueServer
    */
   public async clean(): Promise<void> {
     if (this.getStatus() === ServerStatus.Closed) {
@@ -157,11 +145,11 @@ export default class SqlBlobServer extends ServerBase {
       }
       return;
     }
-    throw Error(`Cannot clean up blob server in status ${this.getStatus()}.`);
+    throw Error(`Cannot clean up queue server in status ${this.getStatus()}.`);
   }
 
   protected async beforeStart(): Promise<void> {
-    const msg = `Azurite Blob service is starting on ${this.host}:${this.port}`;
+    const msg = `Azurite Queue service (SQL) is starting on ${this.host}:${this.port}`;
     logger.info(msg);
 
     if (this.accountDataStore !== undefined) {
@@ -186,7 +174,7 @@ export default class SqlBlobServer extends ServerBase {
   }
 
   protected async afterStart(): Promise<void> {
-    const msg = `Azurite Blob service successfully listens on ${this.getHttpServerAddress()}`;
+    const msg = `Azurite Queue service (SQL) successfully listens on ${this.getHttpServerAddress()}`;
     logger.info(msg);
   }
 

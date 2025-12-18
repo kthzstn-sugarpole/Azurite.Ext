@@ -1,28 +1,21 @@
 #!/usr/bin/env node
 import { access, ensureDir } from "fs-extra";
-import { dirname, join } from "path";
+import { dirname } from "path";
 
 // Load Environment before BlobServerFactory to make sure args works properly
 import Environment from "./common/Environment";
 // tslint:disable-next-line:ordered-imports
 import { BlobServerFactory } from "./blob/BlobServerFactory";
+import { QueueServerFactory } from "./queue/QueueServerFactory";
+import { TableServerFactory } from "./table/TableServerFactory";
 
 import * as Logger from "./common/Logger";
-import QueueConfiguration from "./queue/QueueConfiguration";
-import QueueServer from "./queue/QueueServer";
-import {
-  DEFAULT_QUEUE_EXTENT_LOKI_DB_PATH,
-  DEFAULT_QUEUE_LOKI_DB_PATH,
-  DEFAULT_QUEUE_PERSISTENCE_ARRAY,
-  DEFAULT_QUEUE_PERSISTENCE_PATH
-} from "./queue/utils/constants";
 import SqlBlobServer from "./blob/SqlBlobServer";
 import BlobServer from "./blob/BlobServer";
-
-import TableConfiguration from "./table/TableConfiguration";
+import QueueServer from "./queue/QueueServer";
+import SqlQueueServer from "./queue/SqlQueueServer";
 import TableServer from "./table/TableServer";
-
-import { DEFAULT_TABLE_LOKI_DB_PATH } from "./table/utils/constants";
+import SqlTableServer from "./table/SqlTableServer";
 import { setExtentMemoryLimit } from "./common/ConfigurationBase";
 import { AzuriteTelemetryClient } from "./common/Telemetry";
 
@@ -30,8 +23,8 @@ import { AzuriteTelemetryClient } from "./common/Telemetry";
 
 function shutdown(
   blobServer: BlobServer | SqlBlobServer,
-  queueServer: QueueServer,
-  tableServer: TableServer
+  queueServer: QueueServer | SqlQueueServer,
+  tableServer: TableServer | SqlTableServer
 ) {
   const blobBeforeCloseMessage = `Azurite Blob service is closing...`;
   const blobAfterCloseMessage = `Azurite Blob service successfully closed`;
@@ -65,7 +58,7 @@ async function main() {
 
   // Initialize and validate environment values from command line parameters
   const env = new Environment();
-  
+
   const location = await env.location();
   await ensureDir(location);
   await access(location);
@@ -76,68 +69,24 @@ async function main() {
     await access(dirname(debugFilePath!));
   }
 
+  // Create servers using factories (auto-detects AZURITE_DB env var for SQL support)
   const blobServerFactory = new BlobServerFactory();
   const blobServer = await blobServerFactory.createServer(env);
   const blobConfig = blobServer.config;
 
-  // TODO: Align with blob DEFAULT_BLOB_PERSISTENCE_ARRAY
-  // TODO: Join for all paths in the array
-  DEFAULT_QUEUE_PERSISTENCE_ARRAY[0].locationPath = join(
-    location,
-    DEFAULT_QUEUE_PERSISTENCE_PATH
-  );
+  const queueServerFactory = new QueueServerFactory();
+  const queueServer = await queueServerFactory.createServer(env, location);
+  const queueConfig = queueServer.config;
 
-  const queueConfig = new QueueConfiguration(
-    env.queueHost(),
-    env.queuePort(),
-    env.queueKeepAliveTimeout(),
-    join(location, DEFAULT_QUEUE_LOKI_DB_PATH),
-    join(location, DEFAULT_QUEUE_EXTENT_LOKI_DB_PATH),
-    DEFAULT_QUEUE_PERSISTENCE_ARRAY,
-    !env.silent(),
-    undefined,
-    env.debug() !== undefined,
-    await env.debug(),
-    env.loose(),
-    env.skipApiVersionCheck(),
-    env.cert(),
-    env.key(),
-    env.pwd(),
-    env.oauth(),
-    env.disableProductStyleUrl(),
-    env.inMemoryPersistence(),
-  );
-
-  const tableConfig = new TableConfiguration(
-    env.tableHost(),
-    env.tablePort(),
-    env.tableKeepAliveTimeout(),
-    join(location, DEFAULT_TABLE_LOKI_DB_PATH),
-    env.debug() !== undefined,
-    !env.silent(),
-    undefined,
-    await env.debug(),
-    env.loose(),
-    env.skipApiVersionCheck(),
-    env.cert(),
-    env.key(),
-    env.pwd(),
-    env.oauth(),
-    env.disableProductStyleUrl(),
-    env.inMemoryPersistence(),
-  );
+  const tableServerFactory = new TableServerFactory();
+  const tableServer = await tableServerFactory.createServer(env, location);
+  const tableConfig = tableServer.config;
 
   // We use logger singleton as global debugger logger to track detailed outputs cross layers
   // Note that, debug log is different from access log which is only available in request handler layer to
   // track every request. Access log is not singleton, and initialized in specific RequestHandlerFactory implementations
   // Enable debug log by default before first release for debugging purpose
   Logger.configLogger(blobConfig.enableDebugLog, blobConfig.debugLogFilePath);
-
-  // Create queue server instance
-  const queueServer = new QueueServer(queueConfig);
-
-  // Create table server instance
-  const tableServer = new TableServer(tableConfig);
 
   setExtentMemoryLimit(env, true);
 
@@ -167,7 +116,7 @@ async function main() {
   console.log(
     `Azurite Table service is successfully listening at ${tableServer.getHttpServerAddress()}`
   );
-  
+
   AzuriteTelemetryClient.init(location, !env.disableTelemetry(), env);
   await AzuriteTelemetryClient.TraceStartEvent();
 

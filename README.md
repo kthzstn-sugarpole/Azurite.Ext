@@ -544,19 +544,36 @@ Azurite will refresh customized account name and key from environment variable e
 
 By default, Azurite leverages [loki](https://github.com/techfort/LokiJS) as metadata database.
 However, as an in-memory database, loki limits Azurite's scalability and data persistency.
-Set environment variable `AZURITE_DB=dialect://[username][:password][@]host:port/database` to make Azurite blob service switch to a SQL database based metadata storage, like MySql, SqlServer.
+Set environment variable `AZURITE_DB=dialect://[username][:password][@]host:port/database` to make Azurite services switch to a SQL database based metadata storage.
 
-For example, connect to MySql or SqlServer by set environment variables:
+**Supported Databases:**
+- MySQL: `mysql://username:password@localhost:3306/azurite_db`
+- SQL Server: `mssql://username:password@localhost:1024/azurite_db`
+- SQLite: `sqlite:./azurite.db` or `sqlite:///absolute/path/to/azurite.db`
 
+#### Examples
+
+**MySQL:**
 ```bash
 set AZURITE_DB=mysql://username:password@localhost:3306/azurite_blob
+```
+
+**SQL Server:**
+```bash
 set AZURITE_DB=mssql://username:password@localhost:1024/azurite_blob
 ```
+
+**SQLite:**
+```bash
+set AZURITE_DB=sqlite:./azurite.db
+```
+
+SQLite is a lightweight, file-based database that requires no server setup. It's ideal for development and testing scenarios.
 
 When Azurite starts with above environment variable, it connects to the configured database, and creates tables if not exist.
 This feature is in preview, when Azurite changes database table schema, you need to drop existing tables and let Azurite regenerate database tables.
 
-> Note. Need to manually create database before starting Azurite instance.
+> Note. For MySQL/SQL Server, need to manually create database before starting Azurite instance.
 
 > Note. Blob Copy & Page Blob are not supported by SQL based metadata implementation.
 

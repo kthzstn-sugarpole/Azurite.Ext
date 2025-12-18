@@ -39,8 +39,58 @@ async function build() {
 
   await asyncRename(cacheExe, newName);
 
-  const outputExe = path.resolve('.\\release\\azurite.exe');
+  const releaseDir = path.resolve('.\\release');
+  const outputExe = path.resolve(releaseDir, 'azurite.exe');
+
+  // Ensure release directory exists
+  if (!fs.existsSync(releaseDir)) {
+    fs.mkdirSync(releaseDir, { recursive: true });
+  }
+
   await pkg.exec([path.resolve('.'), ...['--target', pkgTarget], ...['--output', outputExe], ...['-C', 'Brotli']]);
+
+  // Copy sqlite3 native binary to release folder
+  await copySqlite3Binary(releaseDir);
+}
+
+async function copySqlite3Binary(releaseDir) {
+  const sqlite3Paths = [
+    'node_modules\\sqlite3\\build\\Release\\node_sqlite3.node',
+    'node_modules\\sqlite3\\lib\\binding\\napi-v6-win32-x64\\node_sqlite3.node',
+    'node_modules\\sqlite3\\lib\\binding\\node-v108-win32-x64\\node_sqlite3.node'
+  ];
+
+  // Create sqlite3 binding directory in release folder
+  const bindingDir = path.join(releaseDir, 'sqlite3');
+  if (!fs.existsSync(bindingDir)) {
+    fs.mkdirSync(bindingDir, { recursive: true });
+  }
+
+  let copied = false;
+  for (const relativePath of sqlite3Paths) {
+    const sourcePath = path.resolve(relativePath);
+    if (fs.existsSync(sourcePath)) {
+      const destPath = path.join(bindingDir, 'node_sqlite3.node');
+      fs.copyFileSync(sourcePath, destPath);
+      console.log(`Copied sqlite3 native binary: ${sourcePath} -> ${destPath}`);
+      copied = true;
+      break;
+    }
+  }
+
+  if (!copied) {
+    // Try to find any .node file in sqlite3 folder
+    const nodeFiles = glob.sync('node_modules\\sqlite3\\**\\*.node');
+    if (nodeFiles.length > 0) {
+      const destPath = path.join(bindingDir, 'node_sqlite3.node');
+      fs.copyFileSync(nodeFiles[0], destPath);
+      console.log(`Copied sqlite3 native binary: ${nodeFiles[0]} -> ${destPath}`);
+    } else {
+      console.warn('Warning: sqlite3 native binary not found. SQLite support may not work.');
+    }
+  }
+
+  console.log('SQLite3 native binary deployment complete.');
 }
 
 async function downloadCache(pkgTarget) {
