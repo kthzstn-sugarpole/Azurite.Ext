@@ -1,7 +1,7 @@
 {
   "name": "azurite",
   "displayName": "Azurite",
-  "description": "An open source Azure Storage API compatible server",
+  "description": "An open source Azure Storage API compatible server for Sugarpole WebPACS",
   "icon": "icon.png",
   "version": "3.35.0",
   "publisher": "Azurite",
