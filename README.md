@@ -558,14 +558,29 @@ Set environment variable `AZURITE_DB=dialect://[username][:password][@]host:port
 set AZURITE_DB=mysql://username:password@localhost:3306/azurite_blob
 ```
 
+```bash
+# dev environment
+npx cross-env AZURITE_DB="mysql://username:password@127.0.0.1:3306/azurite_blob" npm run azurite
+```
+
 **SQL Server:**
 ```bash
 set AZURITE_DB=mssql://username:password@localhost:1024/azurite_blob
 ```
 
+```bash
+# dev environment
+npx cross-env AZURITE_DB="mssql://username:password@localhost:1024/azurite_blob" npm run azurite
+```
+
 **SQLite:**
 ```bash
 set AZURITE_DB=sqlite:./azurite.db
+```
+
+```bash
+# dev environment
+npx cross-env AZURITE_DB="sqlite:./azurite.db" npm run azurite
 ```
 
 SQLite is a lightweight, file-based database that requires no server setup. It's ideal for development and testing scenarios.
