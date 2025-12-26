@@ -5,7 +5,8 @@ export const FD_CACHE_NUMBER_MIN = 1;
 export const FD_CACHE_NUMBER_MAX = 100;
 export const DEFAULT_MAX_EXTENT_SIZE = 64 * 1024 * 1024; // 64 MB
 export const DEFAULT_READ_CONCURRENCY = 100;
-export const DEFAULT_EXTENT_GC_PROTECT_TIME_IN_MS = 10 * 60 * 1000; // 10mins
+export const DEFAULT_EXTENT_GC_PROTECT_TIME_IN_MS = 10 * 60 * 1000; // 1 min for testing - CHANGE TO 10 * 60 * 1000 FOR PRODUCTION
+export const DEFAULT_UNIFIED_GC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours for production
 export const DEFAULT_SQL_CHARSET = "utf8mb4";
 // IP regex.
 // This is to distinguish IP style hostname from others

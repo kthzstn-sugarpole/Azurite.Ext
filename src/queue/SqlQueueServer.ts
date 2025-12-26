@@ -168,9 +168,12 @@ export default class SqlQueueServer extends ServerBase {
       await this.extentStore.init();
     }
 
-    if (this.gcManager !== undefined) {
-      await this.gcManager.start();
-    }
+    // DISABLED: Queue GC is disabled to prevent cross-service extent deletion.
+    // All services share the same Extents table, so Blob GC (24h interval) handles all cleanup.
+    // See: https://github.com/Azure/Azurite/issues/XXXX
+    // if (this.gcManager !== undefined) {
+    //   await this.gcManager.start();
+    // }
   }
 
   protected async afterStart(): Promise<void> {

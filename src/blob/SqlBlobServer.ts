@@ -13,10 +13,12 @@ import IExtentStore from "../common/persistence/IExtentStore";
 import SqlExtentMetadataStore from "../common/persistence/SqlExtentMetadataStore";
 import ServerBase, { ServerStatus } from "../common/ServerBase";
 import BlobRequestListenerFactory from "./BlobRequestListenerFactory";
-import BlobGCManager from "./gc/BlobGCManager";
+import UnifiedGCManager from "../common/gc/UnifiedGCManager";
 import IBlobMetadataStore from "./persistence/IBlobMetadataStore";
 import SqlBlobMetadataStore from "./persistence/SqlBlobMetadataStore";
 import SqlBlobConfiguration from "./SqlBlobConfiguration";
+import SqlQueueMetadataStore from "../queue/persistence/SqlQueueMetadataStore";
+import { DEFAULT_UNIFIED_GC_INTERVAL_MS } from "../common/utils/constants";
 
 const BEFORE_CLOSE_MESSAGE = `Azurite Blob service is closing...`;
 const BEFORE_CLOSE_MESSAGE_GC_ERROR = `Azurite Blob service is closing... Critical error happens during GC.`;
@@ -101,20 +103,25 @@ export default class SqlBlobServer extends ServerBase {
 
     super(host, port, httpServer, requestListenerFactory, configuration);
 
-    // Default Blob GC Manager
-    // Will close service when any critical GC error happens
-    // GC interval set to 24 hours (86400000ms) to effectively disable automatic GC
-    // This prevents GC from deleting extents before they are properly referenced
-    const gcManager = new BlobGCManager(
-      metadataStore,
+    // Create Queue metadata store for unified GC to check Queue references
+    // This prevents GC from deleting extents that are referenced by Queue service
+    const queueMetadataStore = new SqlQueueMetadataStore(
+      configuration.sqlURL,
+      configuration.sequelizeOptions
+    );
+
+    // Unified GC Manager that checks references from ALL services (Blob, Queue)
+    // before deleting any extent. This prevents cross-service extent deletion.
+    // GC interval set to 24 hours for production stability.
+    const gcManager = new UnifiedGCManager(
+      [metadataStore, queueMetadataStore], // All services' extent providers
       extentMetadataStore,
       extentStore,
-      error => {
+      (error: Error) => {
         // tslint:disable-next-line:no-console
         console.log(BEFORE_CLOSE_MESSAGE_GC_ERROR, error);
         logger.info(BEFORE_CLOSE_MESSAGE_GC_ERROR + JSON.stringify(error));
 
-        // TODO: Bring this back when GC based on SQL implemented
         this.close().then(() => {
           // tslint:disable-next-line:no-console
           console.log(AFTER_CLOSE_MESSAGE);
@@ -122,7 +129,7 @@ export default class SqlBlobServer extends ServerBase {
         });
       },
       logger,
-      86400000 // 24 hours - effectively disable GC
+      DEFAULT_UNIFIED_GC_INTERVAL_MS
     );
 
     this.metadataStore = metadataStore;

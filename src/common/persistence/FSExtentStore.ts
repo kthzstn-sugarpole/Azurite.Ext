@@ -129,6 +129,21 @@ export default class FSExtentStore implements IExtentStore {
       await this.metadataStore.init();
     }
 
+    // Pre-register all active write extents to prevent GC from deleting them
+    // This fixes the race condition where extent is created but not yet linked to a blob
+    for (const extent of this.activeWriteExtents) {
+      await this.metadataStore.updateExtent({
+        id: extent.id,
+        locationId: extent.locationId,
+        path: extent.id,
+        size: extent.offset,
+        lastModifiedInMS: Date.now()
+      });
+      this.logger.debug(
+        `FSExtentStore:init() Pre-registered active extent: ${extent.id}`
+      );
+    }
+
     this.initialized = true;
     this.closed = false;
   }
@@ -350,10 +365,8 @@ export default class FSExtentStore implements IExtentStore {
     const op = () =>
       new Promise<NodeJS.ReadableStream>((resolve, reject) => {
         this.logger.verbose(
-          `FSExtentStore:readExtent() Creating read stream. LocationId:${persistencyId} extentId:${
-            extentChunk.id
-          } path:${path} offset:${extentChunk.offset} count:${
-            extentChunk.count
+          `FSExtentStore:readExtent() Creating read stream. LocationId:${persistencyId} extentId:${extentChunk.id
+          } path:${path} offset:${extentChunk.offset} count:${extentChunk.count
           } end:${extentChunk.offset + extentChunk.count - 1}`,
           contextId
         );
@@ -362,10 +375,8 @@ export default class FSExtentStore implements IExtentStore {
           end: extentChunk.offset + extentChunk.count - 1
         }).on("close", () => {
           this.logger.verbose(
-            `FSExtentStore:readExtent() Read stream closed. LocationId:${persistencyId} extentId:${
-              extentChunk.id
-            } path:${path} offset:${extentChunk.offset} count:${
-              extentChunk.count
+            `FSExtentStore:readExtent() Read stream closed. LocationId:${persistencyId} extentId:${extentChunk.id
+            } path:${path} offset:${extentChunk.offset} count:${extentChunk.count
             } end:${extentChunk.offset + extentChunk.count - 1}`,
             contextId
           );
@@ -561,7 +572,7 @@ export default class FSExtentStore implements IExtentStore {
             )}, after ${count} bytes piped. Reject streamPipe().`,
             contextId
           );
-          
+
           reject(err);
         });
 
@@ -648,15 +659,26 @@ export default class FSExtentStore implements IExtentStore {
 
   /**
    * Select a new extent to append for an exist write directory.
+   * Pre-registers the new extent in metadata store to prevent GC deletion.
    *
    * @private
    * @param {IAppendExtent} appendExtent
    * @memberof FSExtentStore
    */
-  private getNewExtent(appendExtent: IAppendExtent) {
+  private async getNewExtent(appendExtent: IAppendExtent): Promise<void> {
     appendExtent.id = uuid();
     appendExtent.offset = 0;
     appendExtent.fd = undefined;
+
+    // Pre-register the new extent in metadata store to prevent GC from deleting it
+    // This fixes the race condition between extent creation and blob metadata linkage
+    await this.metadataStore.updateExtent({
+      id: appendExtent.id,
+      locationId: appendExtent.locationId,
+      path: appendExtent.id,
+      size: 0,
+      lastModifiedInMS: Date.now()
+    });
   }
 
   /**
